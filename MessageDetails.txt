@@ -1,0 +1,6 @@
+Received message: (Topic:testing_6 Partition:1  Offset:34  Key : null, MessageHey) 
+Received message: (Topic:testing_6 Partition:0  Offset:33  Key : null, MessageMacha) 
+Received message: (Topic:testing_6 Partition:1  Offset:35  Key : null, MessageThere) 
+Received message: (Topic:testing_3 Partition:1  Offset:8  Key : null, MessageYes) 
+Received message: (Topic:testing_3 Partition:0  Offset:10  Key : null, MessageI am) 
+Received message: (Topic:testing_3 Partition:1  Offset:9  Key : null, Messagehere macja) 
