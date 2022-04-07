@@ -62,7 +62,8 @@ public class TracingController {
 		    public void run() {
 			    try {
 			    	System.out.println("Thread Read Started");
-					kac.readMessages();
+					//kac.readMessages();
+			    	kac.readMessagesWithDumping();
 					System.out.println("Thread Read Completed.");
 				} catch (IOException e) {
 					// TODO Auto-generated catch block
@@ -90,7 +91,9 @@ public class TracingController {
 		    public void run() {
 		        System.out.println("Timed Out");
 		        try {
-					kac.DumpBufferToFile();
+		        	if(!kac.getReadCompleted()) {
+					   kac.DumpBufferToFile();
+		        	}
 				} catch (IOException e) {
 					// TODO Auto-generated catch block
 					e.printStackTrace();

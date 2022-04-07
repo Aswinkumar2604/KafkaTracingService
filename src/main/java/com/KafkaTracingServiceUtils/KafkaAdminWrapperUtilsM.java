@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -44,6 +45,9 @@ public class KafkaAdminWrapperUtilsM {
 	private Boolean timedOut = false;
 	private Boolean readCompleted = false;
 	StringBuffer messages = null;
+	private Map <String,StringBuffer> buffer = null;
+	private final Long MAX_BUF_RECS = 10l;
+	private Map<String,Long> bufferLengthTracker;
 	
 	public Boolean getReadCompleted() {
 		return readCompleted;
@@ -97,10 +101,13 @@ public class KafkaAdminWrapperUtilsM {
 	}
 	
 	public void CreateAdminClient(ConnectionParameters cp) {
+		System.out.println("CreateAdminClient Started");
 		admin = AdminClient.create(CreateAndSetProperties(cp));
+		System.out.println("CreateAdminClient Completed");
 	}
 	
 	public void CreateConsumerClient(ConnectionParameters cps) {
+		System.out.println("CreateConsumerClient Started");
 	     Properties props = new Properties();
 	     props.setProperty("bootstrap.servers",cps.getBroker());
 	     //props.setProperty("group.id", "test");
@@ -109,11 +116,15 @@ public class KafkaAdminWrapperUtilsM {
 	     props.setProperty("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
 	     props.setProperty("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
 	     consumer = new KafkaConsumer<String, String>(props);
+	     System.out.println("Topic Partition Assignment Started");
 		 consumer.assign(tp);
+		 System.out.println("Topic Partition Assignment Completed");
      	 ListIterator<TopicPartition> tpIter = tp.listIterator();
 		 while(tpIter.hasNext()) {
 	         TopicPartition tpInfo = tpIter.next();
+	         System.out.println("Seek End Started for Topic:" + tpInfo.topic() + " And Partiton:" + tpInfo.partition());
 	         Long actualEndOffset = consumer.endOffsets(tp).get(tpInfo);
+	         System.out.println("Seek End Completed for Topic:" + tpInfo.topic() + " And Partiton:" + tpInfo.partition());
 		     TopicInfoM tim = to.get(tpInfo.topic());
 		     tim.setTopicDetails(tpInfo.partition(), actualEndOffset);
 		     to.put(tpInfo.topic(), tim);
@@ -128,20 +139,28 @@ public class KafkaAdminWrapperUtilsM {
 		 };
 		 timer.schedule(task, 20000);
 		 */
+		 System.out.println("CreateConsumerClient Started");
 	}
 	
 	@SuppressWarnings("deprecation")
 	public void readMessages() throws IOException {
 		// Go to end offset
 		consumer.seekToEnd(tp);
-		messages = new StringBuffer();
+		buffer = new HashMap<String,StringBuffer>();
 		System.out.println("Read Started");
 		while(timedOut == false) {
-		    ConsumerRecords<String, String> records = consumer.poll(100);
+		    ConsumerRecords<String, String> records = consumer.poll(10);
 		    for (ConsumerRecord<String, String> record : records) {
                 String Message = "Received message: (Topic:"+record.topic() + " Partition:" + record.partition() +  
                                    "  Offset:"+ record.offset() + "  Key : " + record.key() + ", Message" + record.value() + ") \n" ;
-                messages.append(Message);
+                //messages.append(Message);
+                if(!buffer.containsKey(record.topic())) {
+                	buffer.put(record.topic(), new StringBuffer(Message));
+                } else {
+                	StringBuffer str = buffer.get(record.topic());
+                	str.append(Message);
+                	buffer.put(record.topic(),str);
+                }
             }
 		}
 		readCompleted = true;
@@ -149,14 +168,68 @@ public class KafkaAdminWrapperUtilsM {
 		 
 	}
 	
+	@SuppressWarnings("deprecation")
+	public void readMessagesWithDumping() throws IOException {
+		// Go to end offset
+		MessageFileDumper dumper = new MessageFileDumper();
+		consumer.seekToEnd(tp);
+		buffer = new HashMap<String,StringBuffer>();
+		bufferLengthTracker = new HashMap<String,Long>();
+		System.out.println("Read Started");
+
+		while(timedOut == false) {
+		    ConsumerRecords<String, String> records = consumer.poll(10);
+		    for (ConsumerRecord<String, String> record : records) {
+                String Message = "Received message: (Topic:"+record.topic() + " Partition:" + record.partition() +  
+                                   "  Offset:"+ record.offset() + "  Key : " + record.key() + ", Message" + record.value() + ")\n" ;
+                //messages.append(Message);
+                System.out.println(Message);
+                if(!buffer.containsKey(record.topic())) {
+                	buffer.put(record.topic(), new StringBuffer(Message));
+                	bufferLengthTracker.put(record.topic(), new Long(1));
+                } else {
+                	StringBuffer str = buffer.get(record.topic());
+                	str.append(Message);
+                	buffer.put(record.topic(),str);
+                	Long currlen = bufferLengthTracker.get(record.topic());
+                    if (currlen + 1 == MAX_BUF_RECS) {
+                    	dumper.DumpBufferToFile(str, record.topic());
+                    	currlen = (long) 0;
+                    }// Max Buffer length Check
+                    else {
+                    	currlen++;
+                    }
+                    bufferLengthTracker.put(record.topic(), currlen);
+                }// end Else
+            }// end For Loop
+		}// end Wait Loop
+		readCompleted = true;
+		
+        // Push the remaining Buffer into files before closing Buffer file
+		 for(Map.Entry<String,StringBuffer> buf:buffer.entrySet())  
+	     {  
+			 dumper.DumpBufferToFile(buf.getValue(),buf.getKey());
+	     }
+		dumper.CloseBufferDumper();
+		 
+	}
+	
+	
 	public void DumpBufferToFile() throws IOException {
-		BufferedWriter bwr = new BufferedWriter(new FileWriter(new File("./MessageDetails.txt")));
-		 //write contents of StringBuffer to a file
-		 bwr.write(messages.toString());
-		 //flush the stream
-		 bwr.flush();
-		 //close the stream
-		 bwr.close();
+		System.out.println("Message Dump to File Started");
+	     for(Map.Entry<String,StringBuffer> m:buffer.entrySet())  
+	     {  
+	        String tpc = (String) m.getKey();
+	        BufferedWriter bwr = new BufferedWriter(new FileWriter(new File("./"+tpc+".txt")));
+			 //write contents of StringBuffer to a file
+			 bwr.write(m.getValue().toString());
+			 //flush the stream
+			 bwr.flush();
+			 //close the stream
+			 bwr.close();
+	     }  
+	     System.out.println("Message Dump to File Completed");
+		
 	}
 	
 	
@@ -175,10 +248,14 @@ public class KafkaAdminWrapperUtilsM {
 	}
 	
 	public void DescribeTopics() throws InterruptedException, ExecutionException {
-		 Iterator<String> iter = kTopics.iterator();
-		 while(iter.hasNext()) {
-			 DescribeTopicInformation(iter.next());
-		 }
+		System.out.println("DescribeTopics Started");
+		DescribeTopicsInformation();
+		/*Iterator<String> iter = kTopics.iterator();
+		while(iter.hasNext()) {
+		    DescribeTopicInformation(iter.next());
+		}
+		*/
+		System.out.println("DescribeTopics Completed");
 	}
 	
 	public void DisplayTopicDetails() {
@@ -191,10 +268,10 @@ public class KafkaAdminWrapperUtilsM {
 		 }
 	}
 	
+	@SuppressWarnings({/* "unused",*/ "removal" })
 	private void DescribeTopicInformation(String topic) throws InterruptedException, ExecutionException {
-		
-		//DescribeTopicsResult result = admin.describeTopics(Arrays.asList(topic));
-		DescribeTopicsResult result = admin.describeTopics(kTopics);
+		DescribeTopicsResult result = admin.describeTopics(Arrays.asList(topic));
+		//DescribeTopicsResult result = admin.describeTopics(kTopics);
 		Map<String, KafkaFuture<TopicDescription>>  values = result.values();
 		KafkaFuture<TopicDescription> topicDescription = values.get(topic);
 		int partitionCount = topicDescription.get().partitions().size();
@@ -212,13 +289,46 @@ public class KafkaAdminWrapperUtilsM {
 			tp.add(part);
 		}
 	}
+
+	@SuppressWarnings("removal")
+	private void DescribeTopicsInformation() throws InterruptedException, ExecutionException {
+		
+		//DescribeTopicsResult result = admin.describeTopics(Arrays.asList(topic));
+		System.out.println("DescribeTopicsInformation Started");
+		DescribeTopicsResult result = admin.describeTopics(kTopics);
+		Map<String, KafkaFuture<TopicDescription>>  values = result.values();
+		Iterator<String> topicIter = kTopics.iterator();
+		// Iterate Through Topics and build Topic Description
+		while(topicIter.hasNext())
+		{
+			String topic = topicIter.next();
+			KafkaFuture<TopicDescription> topicDescription = values.get(topic);
+			int partitionCount = topicDescription.get().partitions().size();
+			List<TopicPartitionInfo> tpo  = topicDescription.get().partitions();
+			ListIterator<TopicPartitionInfo> topIter  = tpo.listIterator();
 	
+			while (topIter.hasNext()) {
+				TopicPartitionInfo tInfo = topIter.next();
+			    // No entry Found for Topic Create topic
+	        	TopicInfoM tim = new TopicInfoM();
+		    	tim.setPartionCount(partitionCount);
+		    	tim.setTopicDetails(tInfo.partition(), new Long(-1));
+		    	to.put(topic, tim);
+				TopicPartition part = new TopicPartition(topic, tInfo.partition());
+				tp.add(part);
+			}// Topic Partions Loop End
+		}// Topics Loop End
+		System.out.println("DescribeTopicsInformation Completed");
+	}
+
 	public void ListKafkaTopics() throws InterruptedException, ExecutionException {
+		 System.out.println("ListKafkaTopics Started");
 		 ListTopicsOptions options = new ListTopicsOptions();
 		 options.listInternal(false);
 		 ListTopicsResult topics = admin.listTopics(options);
 		 
 		 kTopics = topics.names().get();
+		 System.out.println("ListKafkaTopics Completed");
 	}
 	
 }
